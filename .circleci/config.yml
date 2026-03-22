@@ -2,14 +2,15 @@ version: 2.1
 
 orbs:
   aws-cli: circleci/aws-cli@5.4.1
-  aws-ecr: circleci/aws-ecr@9.8.1   
+  aws-ecr: circleci/aws-ecr@9.8.1
+
 jobs:
   test:
     docker:
       - image: cimg/python:3.12
         environment:
           TEST_RESULTS: /tmp/test-results
-      - image: cimg/postgres:14.0   
+      - image: cimg/postgres:14.0   # Sidecar (off-the-shelf)
         environment:
           POSTGRES_USER: testuser
           POSTGRES_DB: testdb
@@ -36,30 +37,22 @@ jobs:
       - store_artifacts:
           path: /tmp/test-results
 
-  build-and-publish:
-    executor: aws-cli/default   
-    steps:
-      - checkout
+workflows:
+  build-test-deploy:
+    jobs:
+      - test
       - aws-ecr/build_and_push_image:
+          requires:
+            - test
+          filters:
+            branches:
+              only: main   # Publish ONLY on merge to default branch
           account_id: $AWS_ACCOUNT_ID
-          region: $AWS_REGION
           repo: $AWS_ECR_REPO
           tag: "${CIRCLE_SHA1:0:7},latest"
           dockerfile: Dockerfile
+          region: $AWS_REGION
           auth:
             - aws-cli/setup:
                 role_arn: $AWS_ROLE_ARN
                 region: $AWS_REGION
-
-workflows:
-  build-test-deploy:
-    jobs:
-      - test:
-          filters:
-            branches:
-              ignore: main   # Test always runs (even on PRs)
-      - build-and-publish:
-          requires: [test]
-          filters:
-            branches:
-              only: main   # Publish ONLY on merge to default branch
