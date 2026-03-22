@@ -1,0 +1,64 @@
+version: 2.1
+
+orbs:
+  aws-ecr: circleci/aws-ecr@9.8.1   
+jobs:
+  test:
+    docker:
+      - image: cimg/python:3.12
+        environment:
+          TEST_RESULTS: /tmp/test-results
+      - image: cimg/postgres:14.0   
+        environment:
+          POSTGRES_USER: testuser
+          POSTGRES_DB: testdb
+          POSTGRES_PASSWORD: testpass
+    steps:
+      - checkout
+      - run:
+          name: Wait for Postgres sidecar
+          command: |
+            for i in {1..10}; do
+              nc -z localhost 5432 && echo "Postgres ready" && exit 0
+              echo -n "."
+              sleep 1
+            done
+            echo "Postgres failed to start" && exit 1
+      - run: mkdir -p $TEST_RESULTS
+      - run:
+          name: Install dependencies & run tests (shell + Python)
+          command: |
+            pip install -r requirements.txt pytest
+            python -m pytest tests/ --junitxml=$TEST_RESULTS/test-results.xml
+      - store_test_results:
+          path: /tmp/test-results
+      - store_artifacts:
+          path: /tmp/test-results
+
+  build-and-publish:
+    executor: aws-cli/default   
+    steps:
+      - checkout
+      - aws-ecr/build_and_push_image:
+          account_id: $AWS_ACCOUNT_ID
+          region: $AWS_REGION
+          repo: $AWS_ECR_REPO
+          tag: "${CIRCLE_SHA1:0:7},latest"
+          dockerfile: Dockerfile
+          auth:
+            - aws-cli/setup:
+                role_arn: $AWS_ROLE_ARN
+                region: $AWS_REGION
+
+workflows:
+  build-test-deploy:
+    jobs:
+      - test:
+          filters:
+            branches:
+              ignore: main   # Test always runs (even on PRs)
+      - build-and-publish:
+          requires: [test]
+          filters:
+            branches:
+              only: main   # Publish ONLY on merge to default branch
